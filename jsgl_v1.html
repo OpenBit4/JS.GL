@@ -1,0 +1,1170 @@
+﻿<!DOCTYPE html>
+<!-- This is based on DillingerLee's great template here:
+https://github.com/Team-Code/KA_Offline -->
+<html> 
+ <head>
+    <title>JS.GL 1.0</title> 
+</head>
+ <body>
+    <p align="center"> 
+        <!--This draws the Canvas on the webpage -->
+      <canvas id="mycanvas"></canvas> 
+    </p>
+ </body>
+ 
+ <!-- Run all the JavaScript stuff -->
+ <!-- Include the processing.js library -->
+ <!-- See https://khanacademy.zendesk.com/hc/en-us/articles/202260404-What-parts-of-ProcessingJS-does-Khan-Academy-support- for differences -->
+ <script src="https://cdn.jsdelivr.net/processing.js/1.4.8/processing.min.js"></script> 
+ 
+ <script>
+    var sketchProc = function(processingInstance) {
+     with (processingInstance) {
+        size(400, 400,WEBGL); 
+        frameRate(0);
+       {
+        //JS.GL 3D LIBARY VERSION 1.0  
+         var GLBOX=function(x,y,rx,ry,rz,size){
+             translate(x,y);
+             rotateX(rx);
+             rotateY(ry);
+             rotateZ(rz);
+             box(size);
+         };  //BETTER GL BOX FUNCTION (X,Y,RotateX,RotateY,RotateZ,Size) (Less Efficent but easier)
+         var GLSPHERE=function(x,y,size){
+             translate(x,y);
+             sphere(size);
+         }; //SAME THING AS GLBOX EXCEPT IT IS A SPHERE (X,Y,Size)
+//Bob Lyon's 3D Code + Shapes
+//Bob Lyon's Code is very quick and dirty but is not good for advanced shapes with just the examples. Please use GLBOX/GLSPHERE for those uses.
+var Face = (function() {
+    /*
+     * The drawn faces are rendered using "flat shading". See
+     * https://en.wikipedia.org/wiki/Shading#Flat_shading The
+     * light source is infinitely far away, but the lightSrc
+     * vector is used to determine its 3D angles from the faces.
+     * So a light source perpendicular to the picture canvas is
+     * the vector(0, 0, <any positive number>). Note that shapes
+     * do not cast shadows!
+     */
+    var lightSrc = new PVector(-30, -50, 100);
+    var lightMag = lightSrc.mag();
+    var dark = color(40);  /* the color of no light */
+    var staticVisibleFaces = [];
+    var staticOrig = new PVector();
+    var staticNext = new PVector();
+    var staticPrev = new PVector();
+
+
+    /*
+     * Additional cross product method that does not leak memory
+     * at Khan Academy because the caller specifies where the
+     * results are placed. Computes and returns (this ⨯ b). results
+     * can be any PVector (including this and b) or nothing at all.
+     */
+    PVector.prototype.crossRes = function(b, results) {
+        results = results || new PVector();
+        results.set(
+            this.y * b.z - this.z * b.y,
+            this.z * b.x - this.x * b.z,
+            this.x * b.y - this.y * b.x);
+        return results;
+    };
+
+
+    /* Constructor function. Uses (does NOT dup) nodes. */
+    var Face = function(nodes, colour) {
+        this.nodes = nodes;
+        this.color = colour || color(random(230), 200, random(230));
+        this.normal = new PVector();
+    };
+
+
+    /* Draw this face and update mini & maxi coordinates. */
+    Face.prototype.draw = function(mini, maxi) {
+        mini = mini || staticPrev;
+        maxi = maxi || staticNext;
+        var cosTheta = this.normal.dot(lightSrc) / this.normal.mag() / lightMag;
+        var interpolation = (cosTheta < 0) ? 0 : cosTheta;
+        fill(lerpColor(dark, this.color, interpolation));
+
+
+        beginShape();
+        for (var nodes = this.nodes, i = nodes.length; --i >= 0; ) {
+            var persp = nodes[i].persp, x, y, z = persp.z;
+            vertex(x = persp.x, y = persp.y);
+            void((x < mini.x) && (mini.x = x));
+            void((x > maxi.x) && (maxi.x = x));
+            void((y < mini.y) && (mini.y = y));
+            void((y > maxi.y) && (maxi.y = y));
+            void((z < mini.z) && (mini.z = z));
+            void((z > maxi.z) && (maxi.z = z));
+        }
+        endShape(CLOSE);
+    };
+    
+    /*
+     * Return true iff point (x, y) is in this *rendered* face.
+     * See https://www.khanacademy.org/cs/p/5211412870725632
+     * which implements even/odd ray tracing.
+     */
+    Face.prototype.isOver = function(x, y) {
+        var isIn = false;
+        var nodes = this.nodes;
+        for (var i = 0, j = nodes.length - 1; i < nodes.length; j = i++) {
+            var pi = nodes[i].persp, xi = pi.x, yi = pi.y;
+            var pj = nodes[j].persp, xj = pj.x, yj = pj.y;
+            var intersect = yi > y !== yj > y &&
+                x < (xj - xi) * (y - yi) / (yj - yi) + xi;
+            if (intersect) {
+                isIn = !isIn;
+            }
+        }
+        return isIn;
+    };
+    
+    /*
+     * Returns the right-handed (unless "left") normal of this face.
+     * The normal is with respect to the rendered face until raw,
+     * which used actual coordinates.
+     */
+    Face.prototype.getNormal = function(left, raw) {
+        var next = staticNext, prev = staticPrev;
+        var origin, nodes = this.nodes;
+        
+        /* next and prev vectors share common origin nodes[1] */
+        if (raw) {
+            origin = nodes[1];
+            next.set(nodes[2]);
+            prev.set(nodes[0]);
+        } else {
+            origin = nodes[1].persp;
+            next.set(nodes[2].persp);
+            prev.set(nodes[0].persp);
+        }
+        next.sub(origin);
+        prev.sub(origin);
+        if (left) {
+            /* left handed ... */
+            var tmp = next;
+            next = prev;
+            prev = tmp;
+        } 
+        return (this.normal = prev.crossRes(next, this.normal));
+    };
+    
+    /*
+     * Is this face currently visible?  See
+     * https://en.wikipedia.org/wiki/Back-face_culling
+     */
+    Face.prototype.isVisible = function() {
+        return this.getNormal().z > 0;
+    };
+    
+    /*
+     * Assists both back face culling and flat shading. Assumes
+     * this face is part of a shape centered at the origin.
+     * Finds the correct ordering this face's nodes such that
+     * a cross product of two vectors sharing the common nodes[1]
+     * points away from the origin.
+     */
+    Face.prototype.rightHandRule = function(shape) {
+        shape.perspective();  /* heavy handed refresh! */
+        var common = this.nodes[1];
+        var right = this.getNormal();
+        right.add(common);
+        right = right.mag();
+        var left = this.getNormal(true);
+        left.add(common);
+        if (right < left.mag()) {
+            this.nodes.reverse();
+        }
+    };
+    
+    /* Compare two faces based on their minimum Z (or average Z) coordinates. */
+    var compareFace = function(a, b) {
+        return (a.minZ - b.minZ) || (a.aveZ - b.aveZ);
+    };
+    
+    /*
+     * Draw the faces.  Optionally set min and max coordinates.
+     * Populates visible array with actual faces drawn in the
+     * the correct order.
+     */
+    Face.draw = function(faces, visible, mini, maxi) {
+        visible = visible || staticVisibleFaces;
+        visible.length = 0;
+        for (var l = faces.length, i = 0; i < l; i++) {
+            var face = faces[i];
+            if (face.isVisible()) {
+                visible.push(face);
+                /*
+                 * (re)Compute the values of the minimum Z coordinate
+                 * and the average Z value in the face. Useful for
+                 * sorting below.
+                 */
+                var nodes = face.nodes, m = nodes.length;
+                face.minZ = face.aveZ = nodes[0].z;
+                for (var j = 1; j < m; j++) {
+                    var nz = nodes[j].z;
+                    face.aveZ += nz;
+                    void((nz < face.minZ) && (face.minZ = nz));
+                }
+                face.aveZ /= m;
+            }
+        }
+        
+        visible.sort(compareFace);
+        
+        void(mini && mini.set(+Infinity, +Infinity, +Infinity));
+        void(maxi && maxi.set(-Infinity, -Infinity, -Infinity));
+        for (l = visible.length, i = 0; i < l; i++) {
+            visible[i].draw(mini, maxi);
+        }
+    };
+    
+    Face.bg = dark;
+    return Face;
+})(); //FACE Constructor Code
+
+
+/*
+ * Shape3D is a constructor function for a generic shape that is
+ * always constructed at the origin (0, 0, 0). Shapes have methods
+ * for moving, scaling, XYZ axes rotating, and rotating around an axle.
+ *
+ * Shape3D also provides static library functions that are similar
+ * to the methods but apply to the entire universe of shapes and
+ * their nodes.
+ */
+var Shape3D = (function() {
+    /*
+     * A simple perspective is drawn wrt a fixed camera at
+     * a positive Z offset.
+     */
+    var camera = new PVector(0, 0, 2.2 * max(width, height));
+    var tau = (cos(PI) < 0) ? TWO_PI : 360;  /* KA silliness */
+    var json = (function(what) { return this[what]; })("JSON");
+    var jsonInclude = [ "x", "y", "z", "ux", "uy", "uz", "faces", "nodes", "color", "" ];
+    var defaultOrigin = new PVector(0, 0, 0);
+    var ux = new PVector(1, 0, 0);
+    var uy = new PVector(0, 1, 0);
+    var uz = new PVector(0, 0, 1);
+    var tmpV = new PVector();
+    var tmpArray = [];
+    var shapes = [];  /* All managed shapes. */
+    
+    /* Constructor function of a generic shape. */
+    var Shape3D = function(noRecord) {
+        PVector.call(this, 0, 0, 0);  /* this shape's coordinates */
+        this.nodes = [];
+        this.faces = [];
+        this.drawn = [];
+        this.min = new PVector();
+        this.max = new PVector();
+        if (! noRecord) {
+            shapes.push(this);
+        }
+        
+        /*
+         * All constructed nodes are bound to this shape.
+         * A constructor in a constructor?  Really?
+         */
+        var thisShape = this;
+        this.Node = function(x, y, z) {
+            PVector.call(this, x, y, z);
+            thisShape.nodes.push(this);
+            this.persp = new PVector();  /* perspective of this. */
+        };
+        this.Node.prototype = PVector.prototype;
+    };
+    
+    Shape3D.prototype = Object.create(PVector.prototype);
+    
+    /* Remove this shape from the managed shapes array. */
+    Shape3D.prototype.remove = function() {
+        shapes.splice(shapes.indexOf(this), 1);  /* snip */
+    };
+    
+    /* Append this nodes to array a. */
+    Shape3D.prototype.appendNodes = function(a) {
+        a.push.apply(a, this.nodes);
+        a.push(this);
+    };
+    
+    /*
+     * Optionally (re)set unit vectors.  They will undergo
+     * all of the transformations that affect all other
+     * nodes. Handy for personalized rotation axis...
+     */
+    Shape3D.prototype.setUnitAxes = function() {
+        if (! this.ux) {
+            this.ux = new this.Node();
+            this.uy = new this.Node();
+            this.uz = new this.Node();
+        }
+        this.ux.set(ux);
+        this.uy.set(uy);
+        this.uz.set(uz);
+    };
+    
+    /* (re)Compute this shape's X and Y coordinates wrt perspective. */
+    Shape3D.prototype.perspective = function() {
+        for (var nodes = this.nodes, i = nodes.length; --i >= 0; ) {
+            var node = nodes[i];
+            var scale = camera.z / camera.dist(node);
+            node.persp.set(scale * node.x, scale * node.y, node.z);
+        }
+    };
+    
+    /*
+     * Moves this shape by a relative amount delta,
+     * which is either a vector or three numbers.
+     */
+    Shape3D.prototype.move = function() {
+        var delta = arguments[0];
+        if (arguments.length === 3) {
+            delta = tmpV;
+            delta.set.apply(delta, arguments);
+        }
+        for (var nodes = this.nodes, n = nodes.length; --n >= 0; ) {
+            var node = nodes[n];
+            node.add(delta);
+        }
+        this.add(delta);
+    };
+    
+    /*
+     * Moves this shape to new absolute coordinates,
+     * either described by a vector or by three coordinates.
+     */
+    Shape3D.prototype.translate = function() {
+        var delta  = tmpV;
+        delta.set.apply(delta, arguments);
+        delta.sub(this);
+        this.move(delta);
+    };
+    
+    /*
+     * Scales this shape according to one number,
+     * one vector, or three numbers.
+     */
+    Shape3D.prototype.scale = function() {
+        var sf = arguments[0];
+        if (arguments.length === 3) {
+            sf = tmpV;
+            sf.set.apply(sf, arguments);
+        }
+        for (var nodes = this.nodes, n = nodes.length; --n >= 0; ) {
+            var node = nodes[n];
+            node.sub(this);
+            node.mult(sf);
+            node.add(this);
+        }
+    };
+    
+    /*
+     * Rotate the nodes about a 3D axle described by
+     * the line between "from" and "to".  Info at
+     * https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation
+     */
+    Shape3D.rotateNodesAxle = function(nodes, theta, from, to) {
+        if (theta && nodes.length) {
+            var q = tmpV;
+            q.set(to);
+            q.sub(from);
+            q.normalize();
+            q.mult(sin(theta/2));
+            var qr = cos(theta/2),
+                qi = q.x,
+                qj = q.y,
+                qk = q.z,
+                
+                r11 = 1 - 2*(qj*qj + qk*qk),
+                r12 = 0 + 2*(qi*qj - qk*qr),
+                r13 = 0 + 2*(qi*qk + qj*qr),
+                
+                r21 = 0 + 2*(qi*qj + qk*qr),
+                r22 = 1 - 2*(qi*qi + qk*qk),
+                r23 = 0 + 2*(qj*qk - qi*qr),
+                
+                r31 = 0 + 2*(qi*qk - qj*qr),
+                r32 = 0 + 2*(qj*qk + qi*qr),
+                r33 = 1 - 2*(qi*qi + qj*qj),
+            
+                ox = from.x,
+                oy = from.y,
+                oz = from.z;
+            
+            for (var n = nodes.length; --n >= 0; ) {
+                var node = nodes[n];
+                var x = node.x - ox;
+                var y = node.y - oy;
+                var z = node.z - oz;
+                node.x = r11*x + r12*y + r13*z + ox;
+                node.y = r21*x + r22*y + r23*z + oy;
+                node.z = r31*x + r32*y + r33*z + oz;
+            }
+        }
+    };
+    
+    /*
+     * Rotate every node about a 3D axle described by
+     * the line between "from" and "to".
+     */
+    Shape3D.rotateAxle = function(theta, from, to) {
+        var allNodes = tmpArray;
+        allNodes.length = 0;
+        for (var s = shapes.length; --s >= 0; ) {
+            shapes[s].appendNodes(allNodes);
+        }
+        Shape3D.rotateNodesAxle(allNodes, theta, from, to);
+    };
+    
+    /* Rotate this shape's nodes around its Z-axis. */
+    Shape3D.prototype.rotateZ3D = function(theta) {
+        if (theta) {
+            uz.add(this);
+            Shape3D.rotateNodesAxle(this.nodes, theta, this, uz);
+            uz.sub(this);
+        }
+    };
+    
+    /* Rotate this shape's nodes around its Y-axis. */
+    Shape3D.prototype.rotateY3D = function(theta) {
+        if (theta) {
+            uy.add(this);
+            Shape3D.rotateNodesAxle(this.nodes, theta, this, uy);
+            uy.sub(this);
+        }
+    };
+    
+    /* Rotate this shape's nodes around its X-axis. */
+    Shape3D.prototype.rotateX3D = function(theta) {
+        if (theta) {
+            ux.add(this);
+            Shape3D.rotateNodesAxle(this.nodes, theta, this, ux);
+            ux.sub(this);
+        }
+    };
+    
+    /* Rotate every node around the Z axis at origin. */
+    Shape3D.rotateZ3D = function(theta, origin) {
+        void(theta && Shape3D.rotateAxle(theta, origin || defaultOrigin, uz));
+    };
+    
+    /* Rotate every node around the Y axis at origin. */
+    Shape3D.rotateY3D = function(theta, origin) {
+        void(theta && Shape3D.rotateAxle(theta, origin || defaultOrigin, uy));
+    };
+    
+    /* Rotate every node around the X axis at origin. */
+    Shape3D.rotateX3D = function(theta, origin) {
+        void(theta && Shape3D.rotateAxle(theta, origin || defaultOrigin, ux));
+    };
+    
+    /*
+     * Rotate the nodes of this shape about a 3D axle described by
+     * the line between this coordinates and axle.
+     */
+    Shape3D.prototype.rotateAxle = function(theta, axle) {
+        Shape3D.rotateNodesAxle(this.nodes, theta, this, axle || this.uz || defaultOrigin);
+    };
+    
+    /* Compare two shapes based on their centers' Z coordinates. */
+    var compareShape = function(a, b) {
+        return a.z - b.z;
+    };
+    
+    /*
+     * Draw all shapes from back to front. The
+     * rendering of collided shapes is undefined
+     * and often disappointing.
+     */
+    Shape3D.draw = function(dShapes) {
+        dShapes = dShapes || shapes;
+        dShapes.sort(compareShape);
+        for (var l = dShapes.length, i = 0; i < l; i++) {
+            var shape = dShapes[i];
+            shape.perspective();
+            Face.draw(shape.faces, shape.drawn, shape.min, shape.max);
+        }
+    };
+    
+    /* Is point (x, y) in the vicinity of this shape? */
+    Shape3D.prototype.isAround = function(x, y) {
+        return (x >= this.min.x) && (y >= this.min.y) &&
+            (y <= this.max.y) && (x <= this.max.x);
+    };
+    
+    /* Is 2D point (x, y) over this shape's 2D projection? */
+    Shape3D.prototype.isOver = function(x, y) {
+        if (this.isAround(x, y)) {
+            for (var faces = this.drawn, i = faces.length; --i >= 0; ) {
+                var face = faces[i];
+                if (face.isOver(x, y)) {
+                    this.overFace = face;
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    
+    /*
+     * Return the shape that the point (x, y) is over.
+     * NB: Assumes shapes are sorted back to front.
+     */
+    Shape3D.over = function(x, y) {
+        /* Search *must* be front to back! */
+        for (var i = shapes.length; --i >= 0; ) {
+            if (shapes[i].isOver(x, y)) {
+                return shapes[i];
+            }
+        }
+    };
+    
+    /*
+     * Return the JSON description of shape be it
+     * a shape or an array of shapes.
+     */
+    Shape3D.stringify = function(shape) {
+        shape = shape || shapes;
+        var myNodes;
+        
+        var replacer = function(key, value) {
+            if ((! Array.isArray(this)) && (jsonInclude.indexOf(key) < 0)) {
+                return;  /* ignore unwanted key and value */
+            }
+            if (key === "nodes") {
+                if (this.faces && typeof this.z === "number") {
+                    /* Remember the actual nodes of this shape. */
+                    myNodes = value;
+                } else {
+                    /* Replace node references with indices into myNodes. */
+                    var replacement = [];
+                    for (var l = value.length, i = 0; i < l; i++) {
+                        replacement.push(myNodes.indexOf(value[i]));
+                    }
+                    return replacement;
+                }
+            } else if (key === "ux" || key === "uy" || key === "uz") {
+                /* Replace value with an index into myNodes. */
+                return myNodes.indexOf(value);
+            } 
+            return value;
+        };
+        
+        return json.stringify(shape, replacer);
+    };
+    
+    /* Return the JSON description of this shape. */
+    Shape3D.prototype.stringify = function() {
+        return Shape3D.stringify(this);
+    };
+    
+    /* Make a brand new shape based on the properties of conf. */
+    var newShape = function(conf) {
+        var shape = new Shape3D();
+        var myNodes = shape.nodes;
+        shape.set(conf.x, conf.y, conf.z);
+        for (var nodes = conf.nodes, l = nodes.length, i = 0; i < l; i++) {
+            var node = nodes[i];
+            new shape.Node(node.x, node.y, node.z);
+        }
+        
+        for (var faces = conf.faces, l = faces.length, i = 0; i < l; i++) {
+            var face = faces[i];
+            for (var nodes = face.nodes, m = nodes.length, j = 0; j < m; j++) {
+                nodes[j] = myNodes[nodes[j]];
+            }
+            shape.faces.push(new Face(nodes, face.color));
+        }
+        
+        if (conf.ux >= 0) {
+            shape.ux = myNodes[conf.ux];
+            shape.uy = myNodes[conf.uy];
+            shape.uz = myNodes[conf.uz];
+        }
+        return shape;
+    };
+    
+    /* Parse string s and build new shapes. */
+    Shape3D.parse = function(s) {
+        var shapes = json.parse(s);
+        if (! Array.isArray(shapes)) {
+            shapes = [ shapes ];
+        }
+        for (var i = shapes.length; --i >= 0; ) {
+            newShape(shapes[i]);
+        }
+    };
+    
+    /* Clone this shape. */
+    Shape3D.prototype.clone = function() {
+        var s = this.stringify();
+        var conf = json.parse(s);
+        return newShape(conf);
+    };
+    
+    Shape3D.tau = tau;
+    return Shape3D;
+})();
+
+
+/* Constructor function for a 3D star. */
+var Star = (function() {
+    var tau = Shape3D.tau;
+    var ratio = sin(1/20 * tau) / sin(7/20 * tau);
+    var starNode = [];
+    
+    /* Constructor function for a star at (0, 0, 0). */
+    var Star = function(extRadius, depth, topColor, bottomColor) {
+        Shape3D.call(this);
+        bottomColor = bottomColor || color(random(50, 110), 250, random(160, 220));
+        topColor = topColor || color(250, random(160, 220), random(50, 110));
+        var interior = ratio * extRadius;
+        var n = 10;
+        var face;
+        starNode.length = 0;
+        for (var theta = 0; theta < tau; theta += tau / n) {
+            var radius = (radius === extRadius) ? interior : extRadius;
+            var x = radius * cos(theta - tau/4);
+            var y = radius * sin(theta - tau/4);
+            starNode.push(new this.Node(x, y, 0));
+        }
+        
+        this.faces = [];
+        var topNode = new this.Node(0, 0, depth/2);
+        var bottomNode = this.bottomNode = new this.Node(0, 0, -depth/2);
+        for (var prev = n - 1, i = 0; i < n; prev = i++) {
+            this.faces.push(face = new Face([ topNode, starNode[prev], starNode[i] ],
+                topColor));
+            face.rightHandRule(this);
+            this.faces.push(face = new Face([ bottomNode, starNode[prev], starNode[i] ],
+                bottomColor));
+            face.rightHandRule(this);
+        }
+        this.setUnitAxes();
+    };
+    
+    Star.prototype = Shape3D.prototype;
+    
+    return Star;
+})();
+
+
+/* Constructor function for a cuboid. */
+var Cuboid = (function() {
+    
+    /* Constructor function for cuboid centered at origin. */
+    var Cuboid = function(w, h, d) {
+        Shape3D.call(this);
+        var faces = this.faces;
+        w /= 2;
+        h /= 2;
+        d /= 2;
+        var bottom = [
+            new this.Node(-w, -h, -d),
+            new this.Node(-w, +h, -d),
+            new this.Node(+w, +h, -d),
+            new this.Node(+w, -h, -d),
+        ];
+        var top = [
+            new this.Node(-w, -h, +d),
+            new this.Node(-w, +h, +d),
+            new this.Node(+w, +h, +d),
+            new this.Node(+w, -h, +d),
+        ];
+        
+        for (var l = top.length, prev = l - 1, i = 0; i < l; prev = i++) {
+            faces.push(new Face([ bottom[prev], top[prev], top[i], bottom[i] ],
+                faceColor()));
+        }
+        faces.push(new Face(top, faceColor()), new Face(bottom, faceColor()));
+        
+        for (i = faces.length; --i >= 0; ) {
+            faces[i].rightHandRule(this);
+        }
+        
+        this.setUnitAxes();
+    };
+    
+    Cuboid.prototype = Shape3D.prototype;
+    
+    var faceColor = function() {
+        return color(70, random(120, 160), random(190, 230));
+    };
+    
+    return Cuboid;
+})();
+
+
+/* Constructor function for a regular icosahedron. */
+var Icosahedron = (function() {
+    var tau = Shape3D.tau;
+    var phi = (1 + sqrt(5)) / 2;  /* golden mean */
+    var coord = [];  /* avoids leaks */
+    var tmpV = new PVector();
+    var edge;  /* cached answer */
+    var triangles;  /* cached answer */
+    
+    /* Constructor function. */
+    var Icosahedron = function(radius, colour) {
+        Shape3D.call(this);
+        var nodes = this.nodes;
+        var faces = this.faces;
+        colour = colour || color(230, 67, 227);
+    
+        /*
+         * See https://en.wikipedia.org/wiki/Regular_icosahedron 
+         * for node coordinates, edge length, and face generation.
+         */
+        for (var sa = -1; sa < 2; sa += 2) {
+            for (var sb = -1; sb < 2; sb += 2) {
+                coord.length = 0;
+                coord.push(0, sa, sb*phi);
+                for (var i = 0; i < coord.length; i++) {
+                    new this.Node(coord[0], coord[1], coord[2]);
+                    coord.push(coord.shift());  /* rotate */
+                }
+            }
+        }
+        
+        /* The twelve nodes make thirty edges of length 2. Find them. */
+        var edge = wireFrame(nodes);
+
+
+        /* Generate twenty triangular faces. */
+        var triangles = getFaces(edge);
+        for (var i = 0; i < triangles.length; i++) {
+            var t = triangles[i];
+            var face = new Face([ nodes[t[0]], nodes[t[1]], nodes[t[2]] ], colour);
+            faces.push(face);
+            face.rightHandRule(this);
+        }
+        
+        this.scale(radius / 2 / sin(tau/5));
+        this.rotateY3D(tau/6);
+        this.setUnitAxes();
+    };
+    
+    Icosahedron.prototype = Shape3D.prototype;
+    
+    /*
+     * Compute the edges of the Icosahedron given the nodes.
+     * Only needed once, ever. The twelve nodes make thirty
+     * edges of length 2.
+     */
+    var wireFrame = function(nodes) {
+        if (! edge) {
+            edge = [];
+            for (var l = nodes.length, i = 0; i < l; i++) {
+                for (var j = i + 1; j < l; j++) {
+                    if (nodes[i].dist(nodes[j]) === 2) {
+                        edge[i] = edge[i] || [];
+                        edge[i].push(j);
+                    }
+                }
+            }
+        }
+        return edge;
+    };
+    
+    /*
+     * Find the triangle faces of the icosahedron given the edges.
+     * Only needed once, ever.
+     */
+    var getFaces = function(edge) {
+        if (! triangles) {
+           triangles = [];
+           for (var A = 0; A < edge.length; A++) {
+                var neighborsA = edge[A];
+                for (var a = 0; a < neighborsA.length; a++) {
+                    var B = neighborsA[a];
+                    var neighborsB = edge[B];
+                    for (var b = 0; neighborsB && b < neighborsB.length; b++) {
+                        var C = neighborsB[b];
+                        if (neighborsA.indexOf(C) >= 0) {
+                            triangles.push([ A, B, C ]);
+                        }
+                    }
+                }
+            }
+        }
+        return triangles;
+    };
+    
+    return Icosahedron;
+    
+})();
+
+
+/* Constructor function for a soccer ball. */
+var SoccerBall = (function() {
+    var tau = Shape3D.tau;
+    var phi = (1 + sqrt(5)) / 2;  /* golden mean */
+    var pentNodes = [];  /* nodes numbers of pentagons that generate hexagons */
+    var visited5 = [];  /* node numbers that made pentagons */
+    var visited6 = [];  /* list of constructed hexagons */
+    var va = new PVector();
+    var vc = new PVector();
+    var edge;  /* cached answer */
+    var polygon;  /* cached answer */
+    
+    /* Constructor function. */
+    var SoccerBall = function(radius, color5, color6) {
+        Shape3D.call(this);
+        var nodes = this.nodes;
+        var faces = this.faces;
+        color5 = color5 || color(60, 100, 180);
+        color6 = color6 || color(220, 200, 150);
+
+
+        /*
+         * See https://en.wikipedia.org/wiki/Truncated_icosahedron 
+         * for node coordinates, edge length, and face generation.
+         */
+        var x, y, z, sa=0, sb, sc;
+        for (sb = -1; sb < 2; sb += 2) {
+            for (sc = -1; sc < 2; sc += 2) {
+                x = 0; y = sb; z = sc*3*phi;
+                pentNodes.push(nodes.length);
+                new this.Node(x, y, z);
+                void((sc !== sb) && pentNodes.push(nodes.length));
+                new this.Node(y, z, x);
+                new this.Node(z, x, y);
+            }
+        }
+
+
+        for (sa = -1; sa < 2; sa += 2) {
+            for (sb = -1; sb < 2; sb += 2) {
+                for (sc = -1; sc < 2; sc += 2) {
+                    x = sa; y = sb*(2 + phi); z = sc*2*phi;
+                    new this.Node(x, y, z);
+                    new this.Node(y, z, x);
+                    new this.Node(z, x, y);
+                }
+            }
+        }
+        
+        for (sa = -1; sa < 2; sa += 2) {
+            for (sb = -1; sb < 2; sb += 2) {
+                for (sc = -1; sc < 2; sc += 2) {
+                    x = sa*2; y = sb*(1 + 2*phi); z = sc*phi;
+                    new this.Node(x, y, z);
+                    new this.Node(y, z, x);
+                    new this.Node(z, x, y);
+                }
+            }
+        }
+
+
+        /* The sixty nodes make ninety edges of length 2. Find them. */
+        var edge = wireFrame(nodes);
+
+
+        /* Generate 12 pentagon and 20 hexagon faces. */
+        var polygon = getFaces(edge, nodes);
+        for (var i = polygon.length; --i >= 0; ) {
+            var p = polygon[i];
+            var ns = nodesFromNumber(p, nodes);
+            var face = new Face(ns, (ns.length === 5) ? color5 : color6);
+            faces.push(face);
+            face.rightHandRule(this);
+        }
+        
+        this.scale(radius / sqrt(9*phi + 10));
+        this.setUnitAxes();
+    };
+    
+    SoccerBall.prototype = Shape3D.prototype;
+    
+    /*
+     * Compute the edges of the truncated icosahedron given
+     * the nodes. Only needed once, ever. The sixty nodes
+     * make ninety edges of length 2.
+     */
+    var wireFrame = function(nodes) {
+        if (! edge) {
+            edge = [];
+            for (var cnt = 0, l = nodes.length, i = 0; i < l; i++) {
+                for (var j = i + 1; j < l; j++) {
+                    if (nodes[i].dist(nodes[j]) === 2) {
+                        edge[i] = edge[i] || [];
+                        var k = edge[i].indexOf(j);
+                        if (k < 0) {
+                            edge[i].push(j);
+                        }
+                        edge[j] = edge[j] || [];
+                        k = edge[j].indexOf(i);
+                        if (k < 0) {
+                            edge[j].push(i);
+                        }
+                        cnt++;
+                    }
+                }
+            }
+        }
+        return edge;
+    };
+    
+    /* Exchange face's node numbers for actual nodes. */
+    var nodesFromNumber = function(face, nodes) {
+        var n = [];
+        for (var l = face.length, i = 0; i < l; i++) {
+            n.push(nodes[face[i]]);
+        }
+        return n;
+    };
+    
+    /* Compute the angle abc */
+    var angle = function(a, b, c) {
+        va.set(a);
+        va.sub(b);
+        vc.set(c);
+        vc.sub(b);
+        var ac = va.dot(vc) / va.mag() / vc.mag();
+        return acos(ac);
+    };
+    
+    /*
+     * Arrange face's node numbers in a consistent order.
+     * The first node is the smallest number. The second
+     * number is the smallest possible.
+     */
+    var beautifyFace = function(face) {
+        var least = Math.min.apply(null, face);
+        while (face[0] !== least) {
+            face.push(face.shift());
+        }
+        if (face[1] > face[face.length-1]) {
+            face.shift();  /* snip */
+            face.reverse();
+            face.unshift(least);  /* unsnip */
+        }
+    };
+    
+    /* Find the edge that connects the two pentagons. */
+    var connectPentagons = function(edge, a, b) {
+        for (var i = a.length; --i >= 0; ) {
+            var neighbor = edge[a[i]];
+            for (var j = neighbor.length; --j >= 0; ) {
+                var k = b.indexOf(neighbor[j]);
+                if (k >= 0) {
+                    return [ a[i], b[k] ]; /* a new hexagon is born */
+                }
+            }
+        }
+    };
+    
+    /* Find a face containing node number n. */
+    var findByNode = function(faces, n) {
+        for (var i = faces.length; --i >= 0; ) {
+            var f = faces[i];
+            if (f.indexOf(n) >= 0) {
+                return f;
+            }
+        }
+    };
+    
+    /* Given a pentagon face, identify five new hexagons. */
+    var sixFromFive = function(edge, nodes, pentagons, face) {
+        var faces = [];
+        for (var l = face.length, p = l - 1, pp = p - 1, i = 0;
+          i < l; pp = p, p = i++) {
+            var nj, nk, n = face[p];
+            var neighbor = edge[n];
+            for (var j = 0; j < neighbor.length; j++) {
+                nj = neighbor[j];
+                if (nj !== face[pp] && nj !== face[i]) {
+                    break;
+                }
+            }
+            var neighborFace1 = findByNode(pentagons, nj);
+            
+            var next = (i + 1) % l;
+            var m = face[i];
+            var neighbor = edge[m];
+            for (var k = 0; k < neighbor.length; k++) {
+                nk = neighbor[k];
+                if (nk !== face[p] && nk !== face[next]) {
+                    break;
+                }
+            }
+            var neighborFace2 = findByNode(pentagons, nk);
+            
+            var hex = connectPentagons(edge, neighborFace1, neighborFace2);
+            hex.push(nk, m, n, nj);
+            beautifyFace(hex);
+            faces.push(hex);
+        }
+        return faces;
+    };
+    
+    /*
+     * Given the current and previous node numbers of a
+     * pentagon face, return the next node number of that face.
+     */
+    var getNext5 = function(edge, nodes, prev, curr) {
+        var neighbors = edge[curr];
+        for (var i = neighbors.length; --i >= 0; ) {
+            if (neighbors[i] !== prev &&
+                angle(nodes[prev], nodes[curr], nodes[neighbors[i]]) < tau/3) {
+                return neighbors[i];
+            }
+        }
+    };
+    
+    /* Identify an unknown pentagon face beginning at nodes[n]. */
+    var getPentagon = function(edge, nodes, n) {
+        if (visited5.indexOf(n) < 0) {
+            var face = [ n ];
+            var neighbor = edge[n];
+            for (var l = neighbor.length, p = l - 1, i = 0; i < l; p = i++) {
+                var theta = angle(nodes[neighbor[p]], nodes[n], nodes[neighbor[i]]);
+                if (theta < tau/3) {
+                    for (var p = neighbor[p], j = 0; j < 4; j++) {
+                        n = getNext5(edge, nodes, p, p = n);
+                        face.push(n);
+                    }
+                    /*
+                     * Remember those nodes so that they
+                     * are never considered again.
+                     */
+                    visited5.push.apply(visited5, face);
+                    return face;
+                }
+            }
+        }
+    };
+    
+    /* Identify and return the (twelve) pentagon faces. */
+    var getPentagons = function(edge, nodes) {
+        var f, faces = [];
+        for (var n = nodes.length; --n >= 0; ) {
+            void((f = getPentagon(edge, nodes, n)) && (faces.push(f)));
+        }
+        return faces;
+    };
+    
+    /*
+     * Find the faces of the truncated icosahedron given the
+     * edges and nodes.  Only needed once, ever.
+     */
+    var getFaces = function(edge, nodes) {
+        if (! polygon) {
+            var hexagon = [];
+            polygon = getPentagons(edge, nodes);  /* twelve pentagon faces */
+            
+            for (var i = pentNodes.length; --i >= 0; ) {
+                var hex = sixFromFive(edge, nodes, polygon, polygon[pentNodes[i]]);
+                
+                /* Append those new hexes iff they are new. */
+                for (var j = hex.length; --j >= 0; ) {
+                    var hash = hex[j].toString();  /* hex's unique hash */
+                    if (! visited6[hash]) {
+                        visited6[hash] = true; /* record the unique hash */
+                        hexagon.push(hex[j]);
+                    }
+                }
+            }
+            
+            polygon.push.apply(polygon, hexagon);
+        }
+        return polygon;
+    };
+    
+    return SoccerBall;
+    
+})();
+
+
+/* Constructor function for a torus. */
+var Torus = (function() {
+    var tau = Shape3D.tau;
+    var circle = new Shape3D(true);  /* generic cross section */
+    
+    /*
+     * Constructor function for a torus with
+     * a cross section radius of r and a major
+     * radius of R.
+     */
+    var Torus = function(R, r) {
+        circle.scale(r);
+        circle.translate(R, 0, 0);
+        circle.set(0, 0, 0);  /* set "center" back to origin */
+        var cNodes = circle.nodes, cl = cNodes.length;
+        
+        Shape3D.call(this);
+        
+        /*
+         * Generate all nodes, storing them in a series of
+         * cross-section arrays all stored in crossSec.
+         */
+        var crossSec = [];
+        for (var tn = 23, i = 0; i < tn; i++) {
+            /* Duplicate the circle's nodes to the current cross section. */
+            var cs = crossSec[i] = [];
+            for (var j = 0; j < cl; j++) {
+                var cNode = cNodes[j];
+                cs.push(new this.Node(cNode.x, cNode.y, cNode.z));
+            }
+            circle.rotateY3D(tau/tn);  /* rotate off-center cross section */
+        }
+
+
+        /*
+         * Generate the quad faces by visiting
+         * all nodes in all cross sections.
+         */
+        for (var p = tn - 1, i = 0; i < tn; p = i++) {
+            var curr = crossSec[i];
+            var prev = crossSec[p];
+            for (var q = cl - 1, j = 0; j < cl; q = j++) {
+                var face = new Face([ prev[j], prev[q], curr[q], curr[j] ]);
+                this.faces.push(face);
+            }
+        }
+
+
+        this.rotateX3D(tau/4);
+        this.setUnitAxes();
+        
+        /* circle.POP */
+        circle.translate(-R, 0, 0);
+        circle.set(0, 0, 0);  /* "center" returns to origin */
+        circle.scale(1/r);
+    };
+    
+    Torus.prototype = Shape3D.prototype;
+    
+    /* Build the generic cross section of a torus. */
+    for (var epsilon = 1/512, c = 13, i = 0; i < c; i++) {
+        var x = cos(i * tau/c);
+        var y = sin(i * tau/c);
+        new circle.Node(x, y, epsilon);
+    }
+    (new Face(circle.nodes)).rightHandRule(circle);
+    circle.translate(0, 0, -epsilon); 
+    
+    return Torus;
+})();
+       }  //JS.GL Libary 1.0
+       
+       
+       
+       
+       
+    }};
+
+
+    // Get the canvas that Processing-js will use
+    var canvas = document.getElementById("mycanvas"); 
+    // Pass the function sketchProc (defined in myCode.js) to Processing's constructor.
+    var processingInstance = new Processing(canvas, sketchProc); 
+ </script>
+
+
+</html>
